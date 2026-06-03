@@ -357,7 +357,7 @@ void MainWindow::updateUIState() {
     m_start_btn->setEnabled(connected && has_files && is_idle);
     m_pause_btn->setEnabled(is_transferring);
     m_resume_btn->setEnabled(is_paused);
-    m_cancel_btn->setEnabled(is_transferring || is_paused);
+    m_cancel_btn->setEnabled(is_transferring || is_paused || state == TransferEngine::State::Error);
 
     // 更新状态标签
     QString status_text;

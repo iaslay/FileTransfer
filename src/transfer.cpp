@@ -255,7 +255,8 @@ void TransferEngine::sendDirectory(const QString& dir_path) {
 }
 
 void TransferEngine::cancelTransfer() {
-    if (m_state == State::Transferring || m_state == State::Paused) {
+    if (m_state == State::Transferring || m_state == State::Paused
+        || m_state == State::Error || m_state == State::Finished) {
         sendMessage(MessageType::CANCEL_TRANSFER, nullptr, 0);
         // 清空队列
         while (!m_transfer_queue.empty()) m_transfer_queue.pop();

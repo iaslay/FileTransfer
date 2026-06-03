@@ -48,19 +48,18 @@ uint32_t FileUtil::crc32(const char* data, size_t len) {
 }
 
 uint32_t FileUtil::fileCrc32(const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::binary);
-    if (!file.is_open()) return 0;
+    QFile file(QString::fromStdString(filepath));
+    if (!file.open(QIODevice::ReadOnly)) return 0;
 
     buildCrc32Table();
 
     uint32_t crc = 0xFFFFFFFF;
     char buffer[8192];
 
-    while (file.good() && !file.eof()) {
-        file.read(buffer, sizeof(buffer));
-        std::streamsize bytes = file.gcount();
+    while (!file.atEnd()) {
+        qint64 bytes = file.read(buffer, sizeof(buffer));
         if (bytes > 0) {
-            for (std::streamsize i = 0; i < bytes; i++) {
+            for (qint64 i = 0; i < bytes; i++) {
                 uint8_t index = (crc ^ buffer[i]) & 0xFF;
                 crc = (crc >> 8) ^ CRC32_TABLE[index];
             }
@@ -106,20 +105,19 @@ uint32_t FileUtil::readBlock(const std::string& filepath,
                               uint64_t offset,
                               uint32_t size,
                               std::vector<char>& data) {
-    std::ifstream file(filepath, std::ios::binary);
-    if (!file.is_open()) return 0;
+    QFile file(QString::fromStdString(filepath));
+    if (!file.open(QIODevice::ReadOnly)) return 0;
 
     data.resize(size);
-    file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    file.read(data.data(), size);
-    uint32_t read_bytes = static_cast<uint32_t>(file.gcount());
+    file.seek(static_cast<qint64>(offset));
+    qint64 read_bytes = file.read(data.data(), size);
 
-    if (read_bytes < size) {
-        data.resize(read_bytes);
+    if (read_bytes < static_cast<qint64>(size)) {
+        data.resize(static_cast<size_t>(read_bytes));
     }
 
     file.close();
-    return read_bytes;
+    return static_cast<uint32_t>(read_bytes);
 }
 
 bool FileUtil::writeBlockFile(const BlockInfo& block,
@@ -128,9 +126,9 @@ bool FileUtil::writeBlockFile(const BlockInfo& block,
     // 确保临时目录存在
     if (!ensureDir(temp_dir)) return false;
 
-    std::string block_file = temp_dir + "/block_" + std::to_string(block.index) + ".tmp";
-    std::ofstream file(block_file, std::ios::binary);
-    if (!file.is_open()) return false;
+    QString block_file = QString::fromStdString(temp_dir) + "/block_" + QString::number(block.index) + ".tmp";
+    QFile file(block_file);
+    if (!file.open(QIODevice::WriteOnly)) return false;
 
     file.write(data.data(), data.size());
     file.close();
@@ -141,16 +139,15 @@ bool FileUtil::writeBlockFile(const BlockInfo& block,
 bool FileUtil::readBlockFile(const BlockInfo& block,
                               const std::string& temp_dir,
                               std::vector<char>& data) {
-    std::string block_file = temp_dir + "/block_" + std::to_string(block.index) + ".tmp";
-    std::ifstream file(block_file, std::ios::binary);
-    if (!file.is_open()) return false;
+    QString block_file = QString::fromStdString(temp_dir) + "/block_" + QString::number(block.index) + ".tmp";
+    QFile file(block_file);
+    if (!file.open(QIODevice::ReadOnly)) return false;
 
     data.resize(block.size);
-    file.read(data.data(), block.size);
-    uint32_t read_bytes = static_cast<uint32_t>(file.gcount());
+    qint64 read_bytes = file.read(data.data(), block.size);
 
-    if (read_bytes < block.size) {
-        data.resize(read_bytes);
+    if (read_bytes < static_cast<qint64>(block.size)) {
+        data.resize(static_cast<size_t>(read_bytes));
     }
 
     file.close();
@@ -164,8 +161,8 @@ bool FileUtil::mergeFile(const std::string& output_path,
     std::string parent = parentDir(output_path);
     if (!parent.empty() && !ensureDir(parent)) return false;
 
-    std::ofstream file(output_path, std::ios::binary);
-    if (!file.is_open()) return false;
+    QFile file(QString::fromStdString(output_path));
+    if (!file.open(QIODevice::WriteOnly)) return false;
 
     for (const auto& block : blocks) {
         std::vector<char> data;
@@ -226,9 +223,9 @@ bool FileUtil::listDirectory(const std::string& dir_path,
 }
 
 uint64_t FileUtil::fileSize(const std::string& filepath) {
-    struct stat st;
-    if (stat(filepath.c_str(), &st) != 0) return 0;
-    return static_cast<uint64_t>(st.st_size);
+    QFileInfo fi(QString::fromStdString(filepath));
+    if (!fi.exists()) return 0;
+    return static_cast<uint64_t>(fi.size());
 }
 
 bool FileUtil::ensureDir(const std::string& dir_path) {
