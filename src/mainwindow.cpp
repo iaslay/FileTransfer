@@ -504,6 +504,9 @@ void MainWindow::onConnect() {
 
     m_connect_btn->setEnabled(false);
     m_engine->connectToServer(host, port);
+    // 异步连接成功后 onConnected() 中会更新 UI 状态
+    // 如果连接失败，onDisconnected() 或 onStateChanged() 会自动恢复按钮
+    // 但为了防止连接超时期间按钮不可用，updateUIState 已涵盖这种场景
 }
 
 void MainWindow::onDisconnect() {

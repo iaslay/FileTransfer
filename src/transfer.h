@@ -115,6 +115,9 @@ private slots:
     // 连接断开处理
     void onDisconnected();
 
+    // Socket 连接成功（异步连接的回调）
+    void onSocketConnected();
+
     // 错误处理
     void onError(QAbstractSocket::SocketError error);
 
@@ -155,6 +158,9 @@ private:
     QTimer*           m_heartbeat_timer;
     QTimer*           m_heartbeat_check_timer;
     bool              m_heartbeat_pending;
+
+    // 连接超时定时器
+    QTimer*           m_connect_timer = nullptr;
 
     // 临时目录（用于分块传输时的临时文件存储）
     QString           m_temp_dir;
