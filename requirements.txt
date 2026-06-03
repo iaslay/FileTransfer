@@ -1,0 +1,6 @@
+# 核心功能无需任何第三方库（仅用 Python 标准库）
+# 如需加密功能，安装 cryptography：
+cryptography
+
+# 如需打包为独立 exe，安装 PyInstaller：
+# pip install pyinstaller
