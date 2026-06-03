@@ -1,10 +1,9 @@
 #!/bin/bash
 # ============================================================
-# Qt 5.15.2 ARM 交叉编译脚本
-# 在 Ubuntu 虚拟机上运行，编译 ARM 版本的 Qt5 库
+# Qt 5.15.2 ARM 交叉编译脚本 (方案一：Bootlin 低版本 GLIBC 工具链版)
 # ============================================================
 
-set -e
+set -euo pipefail
 
 # 配置参数
 QT_VERSION="5.15.2"
@@ -13,57 +12,15 @@ INSTALL_PREFIX="/opt/Qt5.15.2-arm"
 BUILD_DIR="$HOME/qt5-arm-build"
 JOBS=$(nproc)
 
-# ARM 编译器前缀
-ARM_CROSS=arm-linux-gnueabihf
+# Bootlin 工具链路径
+TOOLCHAIN_PREFIX="/home/undef1ned/toolchains/armv7-eabihf--glibc--stable-2022.08-1/bin/arm-linux"
 
 echo "===================================================="
-echo "  Qt ${QT_VERSION} ARM 交叉编译"
-echo "  安装路径: ${INSTALL_PREFIX}"
-echo "  并行任务: ${JOBS}"
+echo "  Qt ${QT_VERSION} ARM 交叉编译 (低版本 GLIBC 方案)"
 echo "===================================================="
-echo ""
 
-# 检查工具链
-echo "[步骤 1/5] 检查 ARM 交叉编译工具链..."
-
-if ! command -v ${ARM_CROSS}-gcc &> /dev/null; then
-    echo "安装 ARM 交叉编译工具链..."
-    sudo apt-get update
-    sudo apt-get install -y \
-        ${ARM_CROSS}-gcc \
-        ${ARM_CROSS}-g++ \
-        ${ARM_CROSS}-libc-dev \
-        build-essential \
-        libfontconfig1-dev \
-        libfreetype6-dev \
-        libxcb1-dev \
-        libxcb-util0-dev \
-        libxcb-shm0-dev \
-        libxcb-render0-dev \
-        libxcb-keysyms1-dev \
-        libxcb-image0-dev \
-        libxcb-icccm4-dev \
-        libxcb-sync1-dev \
-        libxcb-xfixes0-dev \
-        libxcb-shape0-dev \
-        libxcb-randr0-dev \
-        libxcb-glx0-dev \
-        libxcb-xinerama0-dev \
-        libxcb-xkb-dev \
-        libxkbcommon-dev \
-        libxkbcommon-x11-dev \
-        python3 \
-        perl \
-        flex \
-        bison
-fi
-
-echo "  ✓ 工具链就绪"
-echo ""
-
-# 下载源码
-echo "[步骤 2/5] 下载 Qt ${QT_VERSION} 源码..."
-
+# 1. 准备源码
+echo "[步骤 1/4] 准备源码树..."
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
@@ -75,26 +32,35 @@ if [ ! -d "qt-everywhere-src-${QT_VERSION}" ]; then
     echo "解压源码..."
     tar xf "qt-everywhere-src-${QT_VERSION}.tar.xz"
 fi
-
-echo "  ✓ 源码就绪"
-echo ""
-
-# 创建 mkspec 配置（如果不存在）
-echo "[步骤 3/5] 配置 ARM mkspec..."
-
 QT_SRC_DIR="${BUILD_DIR}/qt-everywhere-src-${QT_VERSION}"
+
+# 2. 自动打入所有历史兼容性补丁
+echo "[步骤 2/4] 自动应用历史累积的所有源码补丁..."
+
+# 补丁 1: GCC 11+ <limits> 补丁
+sed -i '1s/^/#include <limits>\n/' "${QT_SRC_DIR}/qtbase/src/corelib/global/qfloat16.h" 2>/dev/null || true
+sed -i '1s/^/#include <limits>\n/' "${QT_SRC_DIR}/qtbase/src/corelib/text/qbytearraymatcher.h" 2>/dev/null || true
+
+# 补丁 2: zlib 大文件自毁宏补丁 (解决 features-time64 冲突)
+if grep -q "undef _FILE_OFFSET_BITS" "${QT_SRC_DIR}/qtbase/src/3rdparty/zlib/src/gzguts.h" 2>/dev/null; then
+    echo "  -> 正在切除 zlib 捣乱的 undef 宏..."
+    sed -i '/undef _FILE_OFFSET_BITS/d' "${QT_SRC_DIR}/qtbase/src/3rdparty/zlib/src/gzguts.h"
+fi
+
+# 补丁 3: QML 引擎缺失 <cstdint> 补丁 (解决 uintptr_t 未定义错误)
+if ! grep -q "include <cstdint>" "${QT_SRC_DIR}/qtdeclarative/src/qml/compiler/qv4compiler.cpp" 2>/dev/null; then
+    echo "  -> 正在修复 QML 编译器缺失的 cstdint 头文件..."
+    sed -i '1i #include <cstdint>' "${QT_SRC_DIR}/qtdeclarative/src/qml/compiler/qv4compiler.cpp"
+fi
+echo "  ✓ 所有补丁自动处理完毕"
+
+# 3. 部署并重写目标架构 mkspec
+echo "[步骤 3/4] 部署 Bootlin 工具链 mkspec 配置..."
 ARM_MKSPEC="${QT_SRC_DIR}/qtbase/mkspecs/linux-arm-gnueabihf-g++"
+rm -rf "${ARM_MKSPEC}"
+cp -r "${QT_SRC_DIR}/qtbase/mkspecs/linux-arm-gnueabi-g++" "${ARM_MKSPEC}"
 
-if [ ! -d "${ARM_MKSPEC}" ]; then
-    echo "创建 ARM mkspec 配置..."
-    cp -r "${QT_SRC_DIR}/qtbase/mkspecs/linux-arm-gnueabi-g++" "${ARM_MKSPEC}"
-
-    # 修改 qmake.conf
-    cat > "${ARM_MKSPEC}/qmake.conf" << 'QMAKEEOF'
-#
-# qmake configuration for arm-linux-gnueabihf
-#
-
+cat > "${ARM_MKSPEC}/qmake.conf" << QMAKEEOF
 MAKEFILE_GENERATOR      = UNIX
 CONFIG                 += incremental
 QMAKE_INCREMENTAL_STYLE = sublib
@@ -103,42 +69,34 @@ include(../common/linux.conf)
 include(../common/gcc-base-unix.conf)
 include(../common/g++-unix.conf)
 
-# 交叉编译器
-QMAKE_CC                = arm-linux-gnueabihf-gcc
-QMAKE_CXX               = arm-linux-gnueabihf-g++
-QMAKE_LINK              = arm-linux-gnueabihf-g++
-QMAKE_LINK_SHLIB        = arm-linux-gnueabihf-g++
-QMAKE_AR                = arm-linux-gnueabihf-ar cqs
-QMAKE_OBJCOPY           = arm-linux-gnueabihf-objcopy
-QMAKE_NM                = arm-linux-gnueabihf-nm -P
-QMAKE_STRIP             = arm-linux-gnueabihf-strip
+# 关键：完全换成 Bootlin 绝对路径编译器
+QMAKE_CC                = ${TOOLCHAIN_PREFIX}-gcc
+QMAKE_CXX               = ${TOOLCHAIN_PREFIX}-g++
+QMAKE_LINK              = ${TOOLCHAIN_PREFIX}-g++
+QMAKE_LINK_SHLIB        = ${TOOLCHAIN_PREFIX}-g++
+QMAKE_AR                = ${TOOLCHAIN_PREFIX}-ar cqs
+QMAKE_OBJCOPY           = ${TOOLCHAIN_PREFIX}-objcopy
+QMAKE_NM                = ${TOOLCHAIN_PREFIX}-nm -P
+QMAKE_STRIP             = ${TOOLCHAIN_PREFIX}-strip
 
-# ARM 架构标志
-QMAKE_CFLAGS           += -march=armv7-a -mfloat-abi=hard -mfpu=neon
-QMAKE_CXXFLAGS         += -march=armv7-a -mfloat-abi=hard -mfpu=neon
-
-# 链接标志
+# 注入大文件与时间戳宏保护
+QMAKE_CFLAGS           += -march=armv7-a -mfloat-abi=hard -mfpu=neon -Wno-implicit-fallthrough -D_FILE_OFFSET_BITS=64
+QMAKE_CXXFLAGS         += -march=armv7-a -mfloat-abi=hard -mfpu=neon -Wno-implicit-fallthrough -D_FILE_OFFSET_BITS=64
 QMAKE_LFLAGS           += -march=armv7-a -mfloat-abi=hard -mfpu=neon
 
-# 加载设备配置
 load(qt_config)
 QMAKEEOF
-fi
-
 echo "  ✓ mkspec 配置就绪"
-echo ""
 
-# 配置 Qt
-echo "[步骤 4/5] 配置 Qt 交叉编译..."
+# 4. 隔离安全编译 (Shadow Build)
+echo "[步骤 4/4] 准备 Shadow Build 隔离构建环境..."
+SHADOW_BUILD_DIR="${BUILD_DIR}/build"
+rm -rf "${SHADOW_BUILD_DIR}"
+mkdir -p "${SHADOW_BUILD_DIR}"
+cd "${SHADOW_BUILD_DIR}"
 
-cd "${QT_SRC_DIR}"
-
-# 清理之前配置
-if [ -f "config.summary" ]; then
-    make distclean 2>/dev/null || true
-fi
-
-./configure \
+echo "开始执行 Configure..."
+../qt-everywhere-src-${QT_VERSION}/configure \
     -prefix ${INSTALL_PREFIX} \
     -xplatform linux-arm-gnueabihf-g++ \
     -opensource \
@@ -154,6 +112,7 @@ fi
     -skip qtwayland \
     -skip qtlocation \
     -skip qtsensors \
+    -skip qttools \
     -skip qtconnectivity \
     -skip qtserialport \
     -skip qtcharts \
@@ -164,30 +123,14 @@ fi
     -feature-network \
     -no-icu \
     -no-use-gold-linker \
-    -v 2>&1 | tee configure.log
+    -v 2>&1 | tee configure.log; test ${PIPESTATUS[0]} -eq 0
 
-echo ""
-echo "  ✓ 配置完成"
-echo ""
+echo "开始全力并行编译..."
+make -j${JOBS} 2>&1 | tee make.log; test ${PIPESTATUS[0]} -eq 0
 
-# 编译和安装
-echo "[步骤 5/5] 编译并安装 Qt (此步骤可能需要 30-60 分钟)..."
+echo "执行安装到系统目录: ${INSTALL_PREFIX}..."
+sudo make install 2>&1 | tee install.log; test ${PIPESTATUS[0]} -eq 0
 
-make -j${JOBS} 2>&1 | tee make.log
-
-echo ""
-echo "安装到 ${INSTALL_PREFIX}..."
-sudo make install 2>&1 | tee install.log
-
-echo ""
 echo "===================================================="
-echo "  Qt ${QT_VERSION} ARM 交叉编译完成！"
-echo "  安装路径: ${INSTALL_PREFIX}"
-echo ""
-echo "  验证:"
-echo "  ls ${INSTALL_PREFIX}/lib/"
-echo "  ls ${INSTALL_PREFIX}/bin/qmake"
-echo ""
-echo "  编译本项目的 ARM 版本:"
-echo "  ./build_arm.sh"
+echo " 🎉 配合低版本 GLIBC 的 Qt 核心库编译完成！"
 echo "===================================================="
