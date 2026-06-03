@@ -98,28 +98,47 @@ bool TransferEngine::connectToServer(const QString& host, uint16_t port) {
             this, &TransferEngine::onDisconnected);
     connect(m_socket, &QAbstractSocket::errorOccurred,
             this, &TransferEngine::onError);
+    connect(m_socket, &QTcpSocket::connected,
+            this, &TransferEngine::onSocketConnected);
 
+    emit logMessage(tr("正在连接到 %1:%2 ...").arg(host).arg(port));
+
+    // --- 完全异步连接，不阻塞 UI 线程 ---
     m_socket->connectToHost(host, port);
-    if (!m_socket->waitForConnected(5000)) {
-        emit logMessage(tr("连接到 %1:%2 失败: %3")
-                        .arg(host).arg(port).arg(m_socket->errorString()));
-        return false;
+
+    // 检查是否立即失败（如无效的主机名）
+    if (m_socket->state() == QAbstractSocket::UnconnectedState) {
+        // onError 或 onDisconnected 已处理错误，直接返回
+        return true;
     }
 
-    emit logMessage(tr("已连接到服务端 %1:%2").arg(host).arg(port));
-    emit connected();
+    // 设置连接超时定时器（5 秒后如果还没连接成功则断开）
+    m_connect_timer = new QTimer(this);
+    m_connect_timer->setSingleShot(true);
+    connect(m_connect_timer, &QTimer::timeout, this, [this, host, port]() {
+        if (m_socket && m_socket->state() != QAbstractSocket::ConnectedState) {
+            emit logMessage(tr("连接到 %1:%2 超时").arg(host).arg(port));
+            // 强制关闭 socket 并恢复状态（确保 UI 不会卡死）
+            m_socket->abort();
+            // 即使 abort() 没有触发信号，也要确保状态恢复
+            setState(State::Idle);
+            emit disconnected();
+        }
+    });
+    m_connect_timer->start(5000);
 
-    // 发送握手请求
-    HandshakeBody handshake;
-    strncpy(handshake.hostname, QHostInfo::localHostName().toStdString().c_str(), sizeof(handshake.hostname) - 1);
-    sendMessage(MessageType::HANDSHAKE_REQ, &handshake, sizeof(handshake));
     setState(State::Handshaking);
-
-    return true;
+    return true;  // 异步连接，始终返回 true
 }
 
 void TransferEngine::disconnectServer() {
     stopHeartbeat();
+    // 清理连接超时定时器
+    if (m_connect_timer) {
+        m_connect_timer->stop();
+        m_connect_timer->deleteLater();
+        m_connect_timer = nullptr;
+    }
     if (m_socket) {
         m_socket->disconnect();
         m_socket->abort();
@@ -573,15 +592,57 @@ void TransferEngine::onReadyRead() {
 
 void TransferEngine::onDisconnected() {
     stopHeartbeat();
+    // 清理连接超时定时器
+    if (m_connect_timer) {
+        m_connect_timer->stop();
+        m_connect_timer->deleteLater();
+        m_connect_timer = nullptr;
+    }
     emit logMessage(tr("连接已断开"));
     emit disconnected();
     setState(State::Idle);
+}
+
+void TransferEngine::onSocketConnected() {
+    // 清理连接超时定时器
+    if (m_connect_timer) {
+        m_connect_timer->stop();
+        m_connect_timer->deleteLater();
+        m_connect_timer = nullptr;
+    }
+
+    emit logMessage(tr("已连接到服务端 %1:%2")
+                    .arg(m_socket->peerAddress().toString())
+                    .arg(m_socket->peerPort()));
+    emit connected();
+
+    // 发送握手请求
+    HandshakeBody handshake;
+    strncpy(handshake.hostname,
+            QHostInfo::localHostName().toStdString().c_str(),
+            sizeof(handshake.hostname) - 1);
+    sendMessage(MessageType::HANDSHAKE_REQ, &handshake, sizeof(handshake));
+    // 状态已在 connectToServer 中设为 Handshaking
 }
 
 void TransferEngine::onError(QAbstractSocket::SocketError error) {
     Q_UNUSED(error);
     if (m_socket) {
         emit logMessage(tr("网络错误: %1").arg(m_socket->errorString()));
+
+        // 如果尚未建立连接（连接阶段失败），确保状态恢复
+        if (m_socket->state() != QAbstractSocket::ConnectedState
+            && m_state == State::Handshaking) {
+            // 让 onDisconnected 来处理清理，但 error 不会自动触发 disconnected
+            // 所以这里做清理
+            if (m_connect_timer) {
+                m_connect_timer->stop();
+                m_connect_timer->deleteLater();
+                m_connect_timer = nullptr;
+            }
+            setState(State::Idle);
+            emit disconnected();
+        }
     }
 }
 
